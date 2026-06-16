@@ -118,7 +118,7 @@
   <button class="btn" id="stableBtn" title="My Stable">🦄</button>
   <button class="btn" id="backupBtn">⬇︎</button>
 </div>
-<div class="findwrap"><div class="find" id="findBar">Loading the world…</div></div>
+<div class="findwrap"><div class="find" id="findBar">Loading the world…</div><button class="btn" id="skipBtn" title="Skip — try a different country (comes back later)" style="margin-left:8px;pointer-events:auto">⏭</button></div>
 
 <div class="zoomctl">
   <button class="zb" id="zin">+</button>
@@ -158,6 +158,7 @@
     <div class="bar maptop">
       <div class="find" id="mapInfo" style="position:relative">—</div>
       <div class="spacer"></div>
+      <button class="btn" id="mapSkip" title="Skip (comes back later)">⏭</button>
       <button class="btn" id="mapClose">✕</button>
     </div>
     <div id="leafMap"></div>
@@ -570,6 +571,7 @@ function creatureMarkers(){
   return MENAGERIE.filter(c=>state.menagerie[c.id] && c.ll && !(c.ll[0]===0&&c.ll[1]===0))
     .map(c=>({lat:c.ll[0],lng:c.ll[1],cre:c}));
 }
+function deburr(s){return (s||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"");}
 function refreshLayers(){
   if(!world) return;
   refreshPolygons();
@@ -578,7 +580,7 @@ function refreshLayers(){
   const labelData = atlas ? (window._allCentroids||[]) : COUNTRY.filter(c=>state.collected[c.id]).map(c=>({name:c.name,ll:c.ll}));
   world.labelsData(labelData)
     .labelLat(c=>c.ll[0]).labelLng(c=>c.ll[1])
-    .labelText(c=>c.name).labelSize(()=>atlas?0.5:0.62).labelDotRadius(()=>atlas?0.18:0.28)
+    .labelText(c=>deburr(c.name)).labelSize(()=>atlas?0.5:0.62).labelDotRadius(()=>atlas?0.18:0.28)
     .labelColor(()=>atlas?'rgba(255,255,255,0.85)':'#ffffff').labelAltitude(()=>0.02).labelResolution(2);
   // creature html markers
   world.htmlElementsData(creatureMarkers())
@@ -594,13 +596,14 @@ function refreshLayers(){
 /* ---------------- COLLECT (find it yourself) ---------------- */
 let missCount=0;
 function uncollected(){ return COUNTRY.filter(c=>!state.collected[c.id]); }
+let collectQueue=[];
 function nextTarget(){
-  const left=uncollected();
-  if(!left.length){ state.target=null; save(); document.getElementById('findBar').innerHTML='🏆 All 48 found — Master Explorer!'; refreshLayers(); return; }
-  // truly random next target so repeat playthroughs differ
-  if(!state.target || state.collected[state.target]) state.target = left[Math.floor(Math.random()*left.length)].id;
-  missCount=0; save(); renderFind(); refreshPolygons();
+  collectQueue=collectQueue.filter(id=>!state.collected[id]);
+  if(!collectQueue.length) collectQueue=qShuffle(uncollected().map(c=>c.id));   // random order each refill
+  if(!collectQueue.length){ state.target=null; save(); document.getElementById('findBar').innerHTML='🏆 All 48 found — Master Explorer!'; refreshLayers(); return; }
+  state.target=collectQueue[0]; missCount=0; save(); renderFind(); refreshPolygons();
 }
+function skipTarget(){ if(collectQueue.length>1){ collectQueue.push(collectQueue.shift()); state.target=collectQueue[0]; missCount=0; save(); renderFind(); refreshPolygons(); toast('Skipped — back to it later.','hint'); } }
 function renderFind(){
   const t=byId[state.target]; if(!t) return;
   const tiny = !hasPolygon(t.id);
@@ -727,19 +730,22 @@ document.getElementById('stableBtn').onclick=openStable;
 /* ---------------- QUIZ (Recall) ---------------- */
 function qShuffle(a){a=a.slice();for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}return a;}
 function quizPool(){ const c=COUNTRY.filter(x=>state.collected[x.id]); return c.length>=4?c:COUNTRY; }
+let usedQuiz=new Set();
 function makeQuestions(n){
-  const pool=quizPool(); const qs=[]; const types=['cap','cont','flag']; const conts=[...new Set(COUNTRY.map(c=>c.cont))];
-  for(let i=0;i<n;i++){
-    const subj=pool[Math.floor(Math.random()*pool.length)]; const type=types[i%3]; let prompt,correct,options;
+  const pool=quizPool(); const types=['cap','cont','flag']; const conts=[...new Set(COUNTRY.map(c=>c.cont))];
+  let combos=[]; pool.forEach(c=>types.forEach(t=>combos.push(c.id+'|'+t)));
+  let avail=combos.filter(k=>!usedQuiz.has(k));
+  if(avail.length<n){ usedQuiz.clear(); avail=combos.slice(); }      // all asked -> reset the session pool
+  avail=qShuffle(avail).slice(0,Math.min(n,avail.length));
+  return avail.map(k=>{ usedQuiz.add(k); const parts=k.split('|'), subj=byId[parts[0]], type=parts[1]; let prompt,correct,options;
     if(type==='cap'){ prompt='What is the capital of '+subj.flag+' '+subj.name+'?'; correct=subj.cap;
       options=qShuffle([correct,...qShuffle(pool.filter(c=>c.id!==subj.id)).slice(0,3).map(c=>c.cap)]); }
     else if(type==='cont'){ prompt='Which continent is '+subj.flag+' '+subj.name+' in?'; correct=subj.cont;
       options=qShuffle([correct,...qShuffle(conts.filter(c=>c!==correct)).slice(0,3)]); }
     else { prompt='Which country has this flag?  '+subj.flag; correct=subj.name;
       options=qShuffle([correct,...qShuffle(pool.filter(c=>c.id!==subj.id)).slice(0,3).map(c=>c.name)]); }
-    qs.push({prompt,correct,options});
-  }
-  return qs;
+    return {prompt,correct,options};
+  });
 }
 let quizQs=[],quizI=0,quizScore=0;
 function startQuiz(){ quizQs=makeQuestions(8); quizI=0; quizScore=0; document.getElementById('quizM').classList.add('on'); renderQuiz(); }
@@ -871,6 +877,9 @@ function finishMap(){
   }
 }
 document.getElementById('mapClose').onclick=()=>{ if(mapTimer){clearInterval(mapTimer);mapTimer=null;} document.getElementById('mapM').classList.remove('on'); };
+function mapSkip(){ if(mapQueue.length-mapI>1){ mapQueue.push(mapQueue.splice(mapI,1)[0]); renderMapRound(); } }
+document.getElementById('mapSkip').onclick=mapSkip;
+document.getElementById('skipBtn').onclick=skipTarget;
 
 /* ---------------- LIVE: Today / Groups / Bracket (Plan A: fetch-on-open) ---------------- */
 let liveTab='today', livePoll=null, liveStatus='saved';
